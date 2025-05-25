@@ -8,7 +8,7 @@ import config
 import blynk_mqtt
 from demo import Device
 
-BLYNK_FIRMWARE_VERSION = "PicoPlant_v3.8"
+BLYNK_FIRMWARE_VERSION = "PicoPlant"
 
 # Check MQTT instance
 if not hasattr(blynk_mqtt, 'mqtt') or blynk_mqtt.mqtt is None:
