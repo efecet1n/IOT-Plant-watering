@@ -14,4 +14,4 @@ advanced projects, lithium batteries can also be used. The Wi-Fi
 feature on the Pico 2W is something we plan to use too like checking 
 soil or light levels from Blynk app.
 
-![Circuit Diagram:](CircuitDiagram.jpg)
+![Circuit Diagram:](circuit_diagram.jpg)
