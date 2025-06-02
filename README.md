@@ -13,3 +13,5 @@ Raspberry Pi Pico 2W will get power from a USB cable, But in
 advanced projects, lithium batteries can also be used. The Wi-Fi 
 feature on the Pico 2W is something we plan to use too like checking 
 soil or light levels from Blynk app.
+
+![Circuit Diagram:](CircuitDiagram.jpg)
