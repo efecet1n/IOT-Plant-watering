@@ -1,6 +1,6 @@
 # --- WiFi Configuration ---
-WIFI_SSID = "ASUS"
-WIFI_PASS = "224516987324AApR34" 
+WIFI_SSID = "X"
+WIFI_PASS = "X" 
 
 # --- Blynk Project Configuration ---
 BLYNK_TEMPLATE_ID = "TMPL4TdDES3vm"
@@ -58,9 +58,9 @@ LDR_ADC_MAX_DARKNESS_FOR_WATERING = 40000     # Maximum darkness level for water
 # --- System Timing Parameters ---
 SENSOR_POWER_ON_DELAY_MS = 100    # Delay after powering on sensors
 DHT_READ_INTERVAL_MS = 30000      # Interval between DHT sensor readings
-APP_LOOP_INTERVAL_S = 30          # Main application loop interval
+APP_LOOP_INTERVAL_S = 3           # Main application loop interval (increased frequency, but not too fast)
 LOW_WATER_ALARM_INTERVAL_S = 180  # Interval for low water alarm
-HTTP_BLYNK_UPDATE_INTERVAL_S = 3600  # Interval for Blynk HTTP updates
+HTTP_BLYNK_UPDATE_INTERVAL_S = 15 # Blynk HTTP update interval (increased frequency, but not too fast)
 
 # --- Buzzer Sound Configuration ---
 TONE_STARTUP_SEQUENCE = [(523, 100), (659, 100), (784, 100), (1046, 200)]  # C5, E5, G5, C6
