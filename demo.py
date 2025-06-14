@@ -132,6 +132,13 @@ class Device:
             self.buzzer_pwm.duty_u16(0)
             print("Sound sequence stopped.")
 
+    def stop_buzzer(self):
+        # Buzzer'ı hemen durdur
+        try:
+            self.buzzer_pwm.duty_u16(0)
+        except Exception:
+            pass
+
     def play_startup_sound(self):
         # Play three-note startup sequence
         startup_sequence = [(523, 100), (659, 100), (784, 150)]  # C5, E5, G5
@@ -144,12 +151,20 @@ class Device:
 
     def play_watering_action_sound(self, start=True):
         # Sadece manuel sulama için ses
+        self.stop_buzzer()
         if not start:  # Sadece bitişte ses çal
             self.loop.create_task(self._play_tone_async(600, 100))
 
     def play_setting_change_sound(self):
-        # Ayar değişikliği sesi
+        # Ayar değişikliği sesi, çakışmayı önle
+        self.stop_buzzer()
         self.loop.create_task(self._play_tone_async(1200, 50))
+
+    def play_auto_watering_sound(self):
+        # Otomatik sulama için farklı bir ses dizisi
+        self.stop_buzzer()
+        auto_sequence = [(880, 120), (988, 120), (1047, 200)]  # A5, B5, C6
+        self.loop.create_task(self.play_sound_sequence_async(auto_sequence, 80))
 
     async def low_water_alarm_task(self):
         # Low water alarm
@@ -273,7 +288,9 @@ class Device:
             try:
                 query = "&".join([f"{k}={v}" for k, v in payload.items()])
                 url = f"{self.blynk_url}&{query}"
+                print(f"[BLYNK HTTP] URL: {url}")
                 resp = urequests.get(url, timeout=7)
+                print(f"[BLYNK HTTP] Response: {resp.text if hasattr(resp, 'text') else resp.content}")
                 resp.close()
                 gc.collect()
                 self.last_sensor_update_s = utime.time()  # Update last sensor update time
@@ -281,19 +298,39 @@ class Device:
                 print(f"HTTP Error: {e}")
                 self.send_system_message_mqtt(f"HTTP Error: {e}")
 
+    def test_blynk_http(self):
+        # Manuel test fonksiyonu: sabit değerlerle Blynk'e veri gönderir
+        test_url = f"https://{config.BLYNK_MQTT_BROKER}/external/api/update?token={config.BLYNK_AUTH_TOKEN}&V0=55&V1=77"
+        print(f"[TEST] Blynk HTTP Test URL: {test_url}")
+        try:
+            resp = urequests.get(test_url, timeout=7)
+            print(f"[TEST] HTTP Response: {resp.text if hasattr(resp, 'text') else resp.content}")
+            resp.close()
+        except Exception as e:
+            print(f"[TEST] HTTP Error: {e}")
+
     def _is_mqtt_ready(self):
         # Check MQTT readiness
         ready = self.mqtt and hasattr(self.mqtt, 'publish') and hasattr(self.mqtt, 'sock') and self.mqtt.sock is not None
-        print(f"MQTT ready check: {ready}")
+        self._mqtt_ready_log(ready)
         return ready
+
+    def _mqtt_ready_log(self, ready):
+        # Reduce repetitive MQTT ready logs
+        if not hasattr(self, '_mqtt_ready_log_state'):
+            self._mqtt_ready_log_state = None
+        if ready != self._mqtt_ready_log_state:
+            if ready:
+                print("MQTT ready and connection established.")
+            else:
+                print("MQTT not ready.")
+            self._mqtt_ready_log_state = ready
 
     async def wait_for_mqtt(self):
         # Wait for MQTT to be ready
         for _ in range(10):
             if self._is_mqtt_ready():
-                print("MQTT connection ready.")
                 return True
-            print("Waiting for MQTT connection...")
             await asyncio.sleep(1)
         print("MQTT connection timeout.")
         return False
@@ -353,17 +390,57 @@ class Device:
         hour = self.rtc.datetime()[4]
         return self.WATERING_ALLOWED_HOUR_START <= hour < self.WATERING_ALLOWED_HOUR_END
 
+    def print_sensor_data_to_terminal(self, info_messages=None):
+        # Print sensor data to terminal
+        current_time = utime.time()
+        if current_time - self.last_system_message_s >= 15 or info_messages:
+            print("\n=== System Status ===")
+            # Format time nicely
+            dt = self.rtc.datetime()
+            print(f"Time: {dt[2]:02d}/{dt[1]:02d}/{dt[0]} {dt[4]:02d}:{dt[5]:02d}:{dt[6]:02d}")
+            print(f"Soil Moisture: {self.current_soil_percent}%")
+            print(f"Water Level: {self.current_water_percent}%")
+            print(f"Light Level: {self.current_light_percent}%")
+            print(f"Temperature: {self.cached_temp}°C")
+            print(f"Humidity: {self.cached_hum}%")
+            # Show last watering time in hours and minutes
+            if self.last_watering_s > 0:
+                elapsed_seconds = current_time - self.last_watering_s
+                elapsed_hours = elapsed_seconds // 3600
+                elapsed_minutes = (elapsed_seconds % 3600) // 60
+                print(f"Last Watered: {elapsed_hours}h {elapsed_minutes}m ago")
+            else:
+                print("Last Watered: Never")
+            print(f"System Status: {'Online' if self.system_active else 'Offline'}")
+            if self.last_sensor_update_s > 0:
+                elapsed_seconds = current_time - self.last_sensor_update_s
+                elapsed_minutes = elapsed_seconds // 60
+                print(f"Last Sensor Update: {elapsed_minutes}m ago")
+            else:
+                print("Last Sensor Update: Never")
+            # System messages
+            if self.current_water_percent < 20:
+                print("WARNING: Low water level!")
+            if self.current_soil_percent < self.soil_watering_threshold_config:
+                print("INFO: Soil moisture below threshold")
+            if self.current_light_percent < self.THRESHOLD_LIGHT_INSUFFICIENT:
+                print("INFO: Insufficient light level")
+            # Print extra info messages (e.g. auto watering)
+            if info_messages:
+                for msg in info_messages:
+                    print(f"INFO: {msg}")
+            print("===================\n")
+            self.last_system_message_s = current_time
+
     async def run_smart_plant_logic(self):
         if not self.system_active:
             return
-
         messages = []
         now_s = utime.time()
-
+        info_messages = []
         # Light check
         if self._is_daytime() and self.current_light_percent < self.THRESHOLD_LIGHT_INSUFFICIENT:
             messages.append("LOW LIGHT")
-
         # Water level check
         if self.current_raw_water_adc < self.WATER_ADC_LOW_THRESHOLD_VALUE and self.current_raw_water_adc != 0:
             messages.append("LOW WATER")
@@ -373,23 +450,28 @@ class Device:
                 self.last_low_water_alarm_played_s = now_s
         elif self.low_water_alarm_active and self.current_raw_water_adc >= self.WATER_ADC_LOW_THRESHOLD_VALUE:
             self.low_water_alarm_active = False
-
         # Soil moisture check and watering logic
         if self.current_soil_percent < self.soil_watering_threshold_config:
+            info_messages.append("Automatic watering needed.")
             if self.pump_pin.value() == 1:
-                pass
+                info_messages.append("Pump is already running.")
             elif self.current_water_percent < 20:
+                info_messages.append("Automatic watering could not start: Water level is low.")
                 messages.append("NO WATER")
             elif not self._is_efficient_time_for_watering():
+                info_messages.append("Automatic watering could not start: Not allowed time.")
                 messages.append("NIGHT")
             elif (now_s - self.last_watering_s) < self.min_seconds_between_watering_config:
                 remaining_time = self.min_seconds_between_watering_config - (now_s - self.last_watering_s)
+                info_messages.append(f"Automatic watering could not start: Locked ({remaining_time//3600}h left).")
                 messages.append(f"LOCK {remaining_time//3600}h")
             elif self.current_raw_ldr_adc >= self.LDR_ADC_MAX_DARKNESS_FOR_WATERING:
+                info_messages.append("Automatic watering could not start: Too dark.")
                 messages.append("DARK")
             else:
+                info_messages.append("Automatic watering started.")
+                self.play_auto_watering_sound()
                 messages.append("AUTO")
-                self.play_watering_action_sound(start=True)
                 self.pump_pin.on()
                 self.update_blynk_mqtt_pump_status()
                 await asyncio.sleep(self.pump_run_duration_auto_s)
@@ -397,6 +479,8 @@ class Device:
                 self.play_watering_action_sound(start=False)
                 self.update_blynk_mqtt_pump_status()
                 self.last_watering_s = now_s
+        # Print all status and info together
+        self.print_sensor_data_to_terminal(info_messages=info_messages)
 
     def blynk_connected_callback(self):
         print("MQTT Connected")
@@ -434,13 +518,15 @@ class Device:
     def _handle_pump_control(self, payload):
         # Handle pump control from Blynk
         try:
+            self.stop_buzzer()
             if payload == "1":
                 self.pump_pin.on()
-                self.loop.create_task(self._play_tone_async(659, 300))  # Play notification sound when pump is turned on
+                # Hızlı ve kısa bir ses
+                self.loop.create_task(self._play_tone_async(659, 120))
                 print("Pump turned ON via Blynk")
             else:
                 self.pump_pin.off()
-                self.loop.create_task(self._play_tone_async(523, 300))  # Play notification sound when pump is turned off
+                self.loop.create_task(self._play_tone_async(523, 80))
                 print("Pump turned OFF via Blynk")
         except Exception as e:
             print(f"Pump control error: {e}")
@@ -521,53 +607,6 @@ class Device:
         print("Device: MQTT Connection Lost.")
         self.send_system_message_mqtt("Device: MQTT Connection Lost")
 
-    def print_sensor_data_to_terminal(self):
-        # Print sensor data to terminal
-        current_time = utime.time()
-        if current_time - self.last_system_message_s >= 15:  # Print every 15 seconds
-            print("\n=== System Status ===")
-            
-            # Format time nicely
-            dt = self.rtc.datetime()
-            print(f"Time: {dt[2]:02d}/{dt[1]:02d}/{dt[0]} {dt[4]:02d}:{dt[5]:02d}:{dt[6]:02d}")
-            
-            print(f"Soil Moisture: {self.current_soil_percent}%")
-            print(f"Water Level: {self.current_water_percent}%")
-            print(f"Light Level: {self.current_light_percent}%")
-            print(f"Temperature: {self.cached_temp}°C")
-            print(f"Humidity: {self.cached_hum}%")
-            
-            # Show last watering time in hours and minutes
-            if self.last_watering_s > 0:
-                elapsed_seconds = current_time - self.last_watering_s
-                elapsed_hours = elapsed_seconds // 3600
-                elapsed_minutes = (elapsed_seconds % 3600) // 60
-                print(f"Last Watered: {elapsed_hours}h {elapsed_minutes}m ago")
-            else:
-                print("Last Watered: Never")
-            
-            # Show system status
-            print(f"System Status: {'Online' if self.system_active else 'Offline'}")
-            
-            # Show last sensor update time
-            if self.last_sensor_update_s > 0:
-                elapsed_seconds = current_time - self.last_sensor_update_s
-                elapsed_minutes = elapsed_seconds // 60
-                print(f"Last Sensor Update: {elapsed_minutes}m ago")
-            else:
-                print("Last Sensor Update: Never")
-            
-            # System messages
-            if self.current_water_percent < 20:
-                print("WARNING: Low water level!")
-            if self.current_soil_percent < self.soil_watering_threshold_config:
-                print("INFO: Soil moisture below threshold")
-            if self.current_light_percent < self.THRESHOLD_LIGHT_INSUFFICIENT:
-                print("INFO: Insufficient light level")
-            
-            print("===================\n")
-            self.last_system_message_s = current_time
-
     def toggle_system_power(self):
         current_time_ms = utime.ticks_ms()
         if utime.ticks_diff(current_time_ms, self.last_button_press_time_ms) > self.button_debounce_duration_ms:
@@ -575,7 +614,6 @@ class Device:
             self.system_active = not self.system_active
             if self.system_active:
                 print("System ON")
-                # Play startup sound immediately
                 self.play_startup_sound()
                 self.loop.create_task(self.read_all_sensors_sequentially())
                 self.update_blynk_http()
