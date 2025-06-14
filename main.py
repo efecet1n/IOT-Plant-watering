@@ -85,15 +85,6 @@ def setup_network_and_time():
         print("WiFi failed!")
         return False
 
-async def physical_button_check_task():
-    # Check physical button
-    button_pin = plant_device.power_button
-    while True:
-        if button_pin.value() == 0:
-            if plant_device.toggle_system_power():
-                await asyncio.sleep_ms(plant_device.button_debounce_duration_ms + 100)
-        await asyncio.sleep_ms(50)
-
 async def mqtt_check_task():
     # Check MQTT messages
     while True:
@@ -109,7 +100,7 @@ async def mqtt_check_task():
 
 async def app_task():
     # Main application loop
-    interval_s = 30  # 30s for sensor reading
+    interval_s = config.APP_LOOP_INTERVAL_S  # config.py'den alınan değer
     http_interval_s = config.HTTP_BLYNK_UPDATE_INTERVAL_S
     last_http_update_s = utime.time() - http_interval_s
 
@@ -141,15 +132,14 @@ async def start_system():
             print("CRITICAL: No WiFi. System will wait for power button.")
             return
 
-    # System starts in OFF state, waiting for button press
+    # System will start OFF, wait for power button
     plant_device.system_active = False
-    print("System ready. Press GP5 to activate.")
+    print("System ready. Waiting for power button press.")
 
     loop = asyncio.get_event_loop()
     loop.create_task(blynk_mqtt.task())
     loop.create_task(mqtt_check_task())
     loop.create_task(app_task())
-    loop.create_task(physical_button_check_task())
 
     try:
         loop.run_forever()
